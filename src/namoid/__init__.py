@@ -1,4 +1,4 @@
-"""namoid: Python SDK for NamoID, enterprise identity for India (placeholder reservation)."""
+"""namoid: Python SDK for NamoID, enterprise identity for India (OAuth 2.1 / OIDC)."""
 
 from __future__ import annotations
 
