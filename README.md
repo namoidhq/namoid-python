@@ -28,4 +28,4 @@ See the integration guides and API reference at
 
 ## License
 
-[MIT](./LICENSE) © PolyMindsLabs Pvt. Ltd.
+[MIT](https://github.com/namoidhq/namoid-python/blob/main/LICENSE) © PolyMindsLabs Pvt. Ltd.
