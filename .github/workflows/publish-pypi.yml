@@ -1,8 +1,5 @@
 name: publish-pypi
 
-# Manual publish of the `namoid` package to PyPI using Trusted Publishing
-# (OIDC) — no API token/secret. Requires a one-time trusted-publisher entry on
-# the PyPI project pointing at namoidhq/namoid-python + this workflow filename.
 on:
   workflow_dispatch:
 
@@ -31,7 +28,7 @@ jobs:
           python -m pip install --upgrade build
           python -m build
 
-      - name: Publish to PyPI (Trusted Publishing, no token)
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
