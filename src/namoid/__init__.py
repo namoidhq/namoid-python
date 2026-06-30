@@ -1,0 +1,8 @@
+"""namoid: Python SDK for NamoID, enterprise identity for India (placeholder reservation)."""
+
+from __future__ import annotations
+
+__version__ = "0.0.1"
+__homepage__ = "https://namoid.in"
+
+__all__ = ["__homepage__", "__version__"]
