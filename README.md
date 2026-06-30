@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/namoid.svg)](https://pypi.org/project/namoid/)
 [![Python versions](https://img.shields.io/pypi/pyversions/namoid.svg)](https://pypi.org/project/namoid/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/namoidhq/namoid-python/blob/main/LICENSE)
 
 Python SDK for **NamoID** — enterprise identity for India (OAuth 2.1 / OpenID Connect): SSO, MFA, passkeys, and India verification (DigiLocker, Aadhaar, WhatsApp OTP, Truecaller) with a DPDP-ready audit trail.
 
