@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "namoid"
+version = "0.0.1"
+description = "Python SDK for NamoID, enterprise identity for India (OAuth 2.1 / OIDC). Placeholder reservation; the full SDK ships at general availability."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "PolyMindsLabs Pvt. Ltd.", email = "hello@namoid.in" }]
+keywords = [
+  "namoid",
+  "authentication",
+  "oauth",
+  "oauth2",
+  "oidc",
+  "openid-connect",
+  "identity",
+  "sso",
+  "passkeys",
+  "mfa",
+  "india",
+  "dpdp",
+  "digilocker",
+  "aadhaar",
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+  "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://namoid.in"
+Documentation = "https://namoid.in"
+Repository = "https://github.com/namoidhq/namoid-python"
+Issues = "https://github.com/namoidhq/namoid-python/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/namoid"]
