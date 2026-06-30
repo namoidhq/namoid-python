@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Documentation
+    url: https://docs.namoid.in
+    about: Read the NamoID integration and API docs before filing.
+  - name: ✉️ Contact / security reports
+    url: mailto:hello@namoid.in
+    about: Security issues or anything you'd rather not file publicly — email us here.
