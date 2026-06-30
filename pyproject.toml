@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "namoid"
-version = "0.0.1"
+version = "0.0.2"
 description = "Python SDK for NamoID, enterprise identity for India (OAuth 2.1 / OIDC)."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 __homepage__ = "https://namoid.in"
 
 __all__ = ["__homepage__", "__version__"]
