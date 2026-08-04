@@ -21,6 +21,34 @@ pip install "namoid[mcp]"       # the same core, without FastMCP
 
 Python 3.10 or newer. The FastMCP extra requires 3.11.
 
+## Pick what you need
+
+The two surfaces are independent. Take either, both, or neither — you pay only
+for what you name.
+
+| You want | Install | Import | Pulled in |
+|---|---|---|---|
+| Hosted Auth | `namoid` | `namoid` | `httpx` |
+| Protect an MCP server | `namoid[mcp]` | `namoid.mcp` | `httpx`, `joserfc` |
+| …on FastMCP | `namoid[fastmcp]` | `namoid.mcp.fastmcp` | the above, `fastmcp` |
+
+`import namoid` loads neither surface. The top-level names resolve on first use
+(PEP 562), so:
+
+- A Hosted Auth application never imports the MCP code and never needs its extra.
+- An MCP server never imports the Hosted Auth client.
+- The MCP core (`namoid.mcp`) imports no MCP framework at all — `fastmcp` appears
+  only inside `namoid.mcp.fastmcp`, so the core also backs the official MCP
+  Python SDK, a bare Starlette app, or a test.
+
+`dir(namoid)` and `namoid.__all__` still list the full surface, and type checkers
+resolve every export, so laziness costs nothing in editor support. These
+boundaries are enforced by tests in `tests/test_modularity.py`, each run in a
+fresh interpreter, rather than left as an intention.
+
+Everything raises `NamoIDError`, including the MCP errors, so one `except`
+catches both surfaces without importing the one you do not use.
+
 ## Hosted Auth
 
 Hosted Auth redirects the user to a branded NamoID sign-in page and returns a

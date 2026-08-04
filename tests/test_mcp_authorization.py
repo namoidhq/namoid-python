@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from namoid.mcp import (
+pytest.importorskip("joserfc", reason="requires the mcp extra")
+
+from namoid.mcp import (  # noqa: E402 - guarded by importorskip above
     NamoIDMcpConfigurationError,
     NamoIDMcpTokenError,
     create_namoid_mcp_auth,

@@ -13,7 +13,13 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
-from joserfc import jwk, jwt
+
+# The fixture below needs the `mcp` extra. Import it softly so a base-only
+# install can still collect and run the Hosted Auth and modularity tests.
+try:
+    from joserfc import jwk, jwt
+except ImportError:  # pragma: no cover - exercised by the base-only CI job
+    jwk = jwt = None
 
 DEFAULT_KID = "test-key-1"
 
@@ -90,6 +96,8 @@ class FakeAuthorizationServer:
 
 @pytest.fixture
 def authorization_server():
+    if jwk is None:
+        pytest.skip("requires the mcp extra (joserfc)")
     state = FakeAuthorizationServer(issuer="")
     state.add_key(DEFAULT_KID)
 

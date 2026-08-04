@@ -55,8 +55,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[mcp]" pytest pytest-asyncio
 
-      - name: Core and Hosted Auth tests
-        run: python -m pytest tests/test_mcp_authorization.py tests/test_hosted_auth.py -q
+      - name: Core, Hosted Auth, and modularity tests
+        run: >-
+          python -m pytest tests/test_mcp_authorization.py tests/test_hosted_auth.py
+          tests/test_modularity.py -q
 
       - name: Assert fastmcp is absent
         run: |

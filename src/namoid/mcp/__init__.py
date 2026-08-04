@@ -15,6 +15,7 @@ Nothing here imports an MCP framework. For FastMCP, use
 
 from __future__ import annotations
 
+from namoid._errors import NamoIDError
 from namoid.mcp._authorization import (
     McpCaller,
     NamoIDMcpAuth,
@@ -30,6 +31,7 @@ from namoid.mcp._authorization import (
 
 __all__ = [
     "McpCaller",
+    "NamoIDError",
     "NamoIDMcpAuth",
     "NamoIDMcpConfigurationError",
     "NamoIDMcpTokenError",

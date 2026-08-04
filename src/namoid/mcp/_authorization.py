@@ -17,6 +17,9 @@ import httpx
 from joserfc import jwk, jws, jwt
 from joserfc.errors import JoseError
 
+# stdlib-only, so sharing the error base couples nothing.
+from namoid._errors import NamoIDError
+
 __all__ = [
     "McpCaller",
     "NamoIDMcpAuth",
@@ -45,11 +48,11 @@ _MIN_JWKS_REFRESH_INTERVAL_SECONDS = 10.0
 _LOCAL_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
-class NamoIDMcpConfigurationError(Exception):
+class NamoIDMcpConfigurationError(NamoIDError):
     """Configuration or discovery is wrong. Raised at startup, never per request."""
 
 
-class NamoIDMcpTokenError(Exception):
+class NamoIDMcpTokenError(NamoIDError):
     """A bearer token was rejected.
 
     The message is deliberately short and free of token contents, so it is safe
