@@ -12,7 +12,7 @@ Python SDK for [NamoID](https://namoid.in) — enterprise identity for India (OA
 pip install namoid
 ```
 
-The base package has no dependencies. Protecting an MCP server adds an extra:
+Hosted Auth needs only the base install. Protecting an MCP server adds an extra:
 
 ```bash
 pip install "namoid[fastmcp]"   # protect a FastMCP server (Python 3.11+)
@@ -20,6 +20,82 @@ pip install "namoid[mcp]"       # the same core, without FastMCP
 ```
 
 Python 3.10 or newer. The FastMCP extra requires 3.11.
+
+## Hosted Auth
+
+Hosted Auth redirects the user to a branded NamoID sign-in page and returns a
+one-time code. The Client ID resolves the application, its environment, and its
+Hosted Auth domain, so there is no issuer or application UUID to configure.
+
+```python
+from namoid import NamoIDClient
+
+namoid = NamoIDClient(
+    client_id=os.environ["NAMOID_CLIENT_ID"],
+    client_secret=os.environ["NAMOID_CLIENT_SECRET"],   # server-side only
+)
+
+# 1. Start a state-bound transaction and keep the verifier in the user's session.
+transaction = namoid.create_transaction()
+session["namoid_state"] = transaction.state
+session["namoid_verifier"] = transaction.code_verifier
+
+# 2. Send the browser to the application's own hosted sign-in page.
+url = namoid.hosted_auth_url(
+    return_to="https://app.example/auth/callback",
+    state=transaction.state,
+    completion_mode="confidential",
+    code_challenge=transaction.code_challenge,
+)
+
+# 3. On the callback, compare state, then exchange the code on the server.
+tokens = namoid.exchange_code(
+    code=request.args["code"],
+    code_verifier=session.pop("namoid_verifier"),
+)
+
+# 4. Confirm the token and create your own application session.
+result = namoid.validate_access_token(tokens.access_token)
+if not result.valid:
+    raise Unauthorized()
+
+# 5. On sign-out, revoke the NamoID session too.
+namoid.revoke_session(access_token=tokens.access_token, refresh_token=tokens.refresh_token)
+```
+
+`AsyncNamoIDClient` has exactly the same methods with `await`, for FastAPI,
+Starlette, or any async framework:
+
+```python
+from namoid import AsyncNamoIDClient
+
+async with AsyncNamoIDClient(client_id=..., client_secret=...) as namoid:
+    tokens = await namoid.exchange_code(code=code, code_verifier=verifier)
+```
+
+Both accept an `http_client` if you want to supply your own configured
+`httpx.Client` / `httpx.AsyncClient`, and cache the auth config after the first
+fetch.
+
+For a browser-only public client, redirect with `completion_mode="public"` and
+exchange with `confidential=False` — PKCE protects the flow and no secret is
+involved. Never put a Client Secret anywhere a browser can reach.
+
+| Method | Endpoint |
+|---|---|
+| `get_auth_config()` | `GET /v1/auth/config` |
+| `hosted_auth_url(...)` | builds the URL, no request |
+| `exchange_code(...)` | `POST /v1/auth/hosted/exchange` |
+| `refresh(...)` | `POST /v1/auth/refresh` |
+| `validate_access_token(...)` | `POST /v1/auth/tokens/validate` |
+| `revoke_session(...)` | `POST /v1/auth/logout` |
+
+Every failure raises `NamoIDError`, carrying `status`, `code` (the API's own
+error code when present), and the parsed `detail`.
+
+`namoid.hosted_auth` exposes the pure pieces — `create_hosted_auth_transaction`,
+`build_hosted_auth_url`, `build_configured_hosted_auth_url`, `pkce_challenge`,
+`random_base64url` — if you would rather drive the flow yourself.
 
 ## Protect an MCP server
 

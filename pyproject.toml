@@ -42,17 +42,19 @@ classifiers = [
   "Topic :: Software Development :: Libraries",
 ]
 
+dependencies = [
+  "httpx>=0.28",
+]
+
 [project.optional-dependencies]
 # Protect an MCP server. Framework-agnostic core: discovery, audience-bound
 # token verification, and RFC 9728 metadata.
 mcp = [
-  "httpx>=0.28",
   "joserfc>=1.0",
 ]
 # The same core wired into FastMCP. `fastmcp` itself requires a newer Python
 # than this package's floor, so pip enforces that when the extra is installed.
 fastmcp = [
-  "httpx>=0.28",
   "joserfc>=1.0",
   "fastmcp>=3.4.5,<4",
 ]
