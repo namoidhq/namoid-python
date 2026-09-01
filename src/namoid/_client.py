@@ -7,7 +7,8 @@ flavours cannot drift apart. Only the transport differs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+import base64
+from typing import Any, Mapping, Sequence
 
 import httpx
 
@@ -20,6 +21,14 @@ from namoid.hosted_auth import (
     TokenValidation,
     build_configured_hosted_auth_url,
     create_hosted_auth_transaction,
+)
+from namoid.oidc import (
+    OIDCDiscovery,
+    OIDCTransaction,
+    build_authorization_url,
+    build_logout_url,
+    create_oidc_transaction,
+    validate_id_token,
 )
 
 __all__ = ["AsyncNamoIDClient", "NamoIDClient"]
@@ -35,6 +44,7 @@ class _Call:
     path: str
     params: Mapping[str, Any] | None = None
     json: Mapping[str, Any] | None = None
+    data: Mapping[str, Any] | None = None
     headers: Mapping[str, str] | None = None
     expect_body: bool = True
     failure_code: str = "namoid_request_failed"
@@ -51,36 +61,37 @@ def _config_call(client_id: str) -> _Call:
     )
 
 
-def _exchange_call(
+def _token_call(
     *,
+    endpoint: str,
     code: str,
-    code_verifier: str | None,
-    client_id: str | None,
+    redirect_uri: str,
+    code_verifier: str,
+    client_id: str,
     client_secret: str | None,
-    device_id: str | None,
 ) -> _Call:
+    headers = _oauth_client_headers(client_id, client_secret)
     return _Call(
         "POST",
-        "/v1/auth/hosted/exchange",
-        json=_compact(
-            {
-                "code": code,
-                "code_verifier": code_verifier,
-                "device_id": device_id,
-                "client_id": client_id,
-                "client_secret": client_secret,
-            }
-        ),
+        endpoint,
+        data={"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
+              "code_verifier": code_verifier, "client_id": client_id},
+        headers=headers,
         failure_code="hosted_auth_exchange_failed",
-        failure_label="Hosted Auth exchange",
+        failure_label="OIDC code exchange",
     )
 
 
-def _refresh_call(refresh_token: str) -> _Call:
+def _refresh_call(*, endpoint: str, refresh_token: str, client_id: str,
+                  client_secret: str | None, scopes: Sequence[str] | None = None) -> _Call:
+    data = {"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": client_id}
+    if scopes:
+        data["scope"] = " ".join(dict.fromkeys(scopes))
     return _Call(
         "POST",
-        "/v1/auth/refresh",
-        json={"refresh_token": refresh_token},
+        endpoint,
+        data=data,
+        headers=_oauth_client_headers(client_id, client_secret),
         failure_code="token_refresh_failed",
         failure_label="Token refresh",
     )
@@ -98,6 +109,21 @@ def _validate_call(*, token: str, client_id: str | None, client_secret: str | No
     )
 
 
+def _userinfo_call(*, endpoint: str, access_token: str) -> _Call:
+    return _Call("GET", endpoint, headers={"authorization": f"Bearer {access_token}"},
+                 failure_code="userinfo_failed", failure_label="OIDC UserInfo")
+
+
+def _revoke_call(*, endpoint: str, token: str, token_type_hint: str | None,
+                 client_id: str, client_secret: str | None) -> _Call:
+    data = {"token": token, "client_id": client_id}
+    if token_type_hint:
+        data["token_type_hint"] = token_type_hint
+    return _Call("POST", endpoint, data=data,
+                 headers=_oauth_client_headers(client_id, client_secret), expect_body=False,
+                 failure_code="token_revocation_failed", failure_label="OIDC token revocation")
+
+
 def _logout_call(*, access_token: str, refresh_token: str | None) -> _Call:
     return _Call(
         "POST",
@@ -108,6 +134,14 @@ def _logout_call(*, access_token: str, refresh_token: str | None) -> _Call:
         failure_code="session_revocation_failed",
         failure_label="Session revocation",
     )
+
+
+def _oauth_client_headers(client_id: str, client_secret: str | None) -> Mapping[str, str]:
+    headers = {"content-type": "application/x-www-form-urlencoded"}
+    if client_secret:
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        headers["authorization"] = f"Basic {credentials}"
+    return headers
 
 
 class _ClientBase:
@@ -126,6 +160,7 @@ class _ClientBase:
         self._api_base_url = api_base_url.rstrip("/")
         self._timeout = timeout
         self._config: AuthConfig | None = None
+        self._discovery: OIDCDiscovery | None = None
 
     @property
     def client_id(self) -> str:
@@ -136,8 +171,19 @@ class _ClientBase:
         """Fresh ``state`` and PKCE material for one sign-in attempt."""
         return create_hosted_auth_transaction()
 
+    @staticmethod
+    def create_oidc_transaction(redirect_uri: str) -> OIDCTransaction:
+        return create_oidc_transaction(redirect_uri)
+
     def _url(self, path: str) -> str:
+        if path.startswith(("https://", "http://")):
+            return path
         return f"{self._api_base_url}{path}"
+
+    def _authorization_url(self, discovery: OIDCDiscovery, transaction: OIDCTransaction,
+                           scopes: Sequence[str], extra_params: Mapping[str, str] | None) -> str:
+        return build_authorization_url(discovery, self._client_id, transaction,
+                                       scopes=scopes, extra_params=extra_params)
 
     def _require_secret(self, provided: str | None) -> str:
         secret = provided or self._client_secret
@@ -183,6 +229,23 @@ class NamoIDClient(_ClientBase):
             self._config = AuthConfig.from_payload(self._send(_config_call(self._client_id)))
         return self._config
 
+    def get_oidc_discovery(self, *, refresh: bool = False) -> OIDCDiscovery:
+        """Fetch and cache the issuer's validated OpenID Connect metadata."""
+        if self._discovery is None or refresh:
+            issuer = self.get_auth_config(refresh=refresh).issuer.rstrip("/")
+            payload = self._send(
+                _Call("GET", f"{issuer}/.well-known/openid-configuration",
+                      failure_code="oidc_discovery_failed", failure_label="OIDC discovery")
+            )
+            self._discovery = OIDCDiscovery.from_payload(payload, expected_issuer=issuer)
+        return self._discovery
+
+    def authorization_url(self, transaction: OIDCTransaction, *,
+                          scopes: Sequence[str] = ("openid", "profile", "email"),
+                          extra_params: Mapping[str, str] | None = None) -> str:
+        """Build a standard OIDC Authorization Code + PKCE URL."""
+        return self._authorization_url(self.get_oidc_discovery(), transaction, scopes, extra_params)
+
     def hosted_auth_url(self, **kwargs: Any) -> str:
         """Build the Hosted Auth URL for this application.
 
@@ -195,10 +258,10 @@ class NamoIDClient(_ClientBase):
         self,
         *,
         code: str,
-        code_verifier: str | None = None,
+        code_verifier: str,
+        redirect_uri: str,
         client_secret: str | None = None,
-        device_id: str | None = None,
-        confidential: bool = True,
+        confidential: bool | None = None,
     ) -> TokenResponse:
         """Exchange a one-time Hosted Auth code for a NamoID session.
 
@@ -207,21 +270,60 @@ class NamoIDClient(_ClientBase):
                 matching ``completion_mode="confidential"`` on the redirect. Pass
                 false for the browser-only PKCE flow.
         """
-        secret = self._require_secret(client_secret) if confidential else None
+        secret = client_secret or self._client_secret
+        if confidential is True:
+            secret = self._require_secret(client_secret)
+        discovery = self.get_oidc_discovery()
         payload = self._send(
-            _exchange_call(
+            _token_call(
+                endpoint=discovery.token_endpoint,
                 code=code,
+                redirect_uri=redirect_uri,
                 code_verifier=code_verifier,
                 client_id=self._client_id,
                 client_secret=secret,
-                device_id=device_id,
             )
         )
         return TokenResponse.from_payload(payload)
 
-    def refresh(self, refresh_token: str) -> TokenResponse:
+    def refresh(self, refresh_token: str, *, scopes: Sequence[str] | None = None,
+                client_secret: str | None = None) -> TokenResponse:
         """Rotate a refresh token for a new session."""
-        return TokenResponse.from_payload(self._send(_refresh_call(refresh_token)))
+        discovery = self.get_oidc_discovery()
+        return TokenResponse.from_payload(self._send(_refresh_call(
+            endpoint=discovery.token_endpoint, refresh_token=refresh_token,
+            client_id=self._client_id, client_secret=client_secret or self._client_secret,
+            scopes=scopes,
+        )))
+
+    def user_info(self, access_token: str) -> Mapping[str, Any]:
+        return self._send(_userinfo_call(
+            endpoint=self.get_oidc_discovery().userinfo_endpoint, access_token=access_token
+        ))
+
+    def validate_id_token(self, id_token: str, *, nonce: str) -> Mapping[str, Any]:
+        discovery = self.get_oidc_discovery()
+        jwks = self._send(_Call("GET", discovery.jwks_uri, failure_code="jwks_unavailable",
+                                failure_label="OIDC signing keys"))
+        return validate_id_token(id_token, jwks=jwks, issuer=discovery.issuer,
+                                 client_id=self._client_id, nonce=nonce)
+
+    def revoke_token(self, token: str, *, token_type_hint: str | None = None,
+                     client_secret: str | None = None) -> None:
+        discovery = self.get_oidc_discovery()
+        if not discovery.revocation_endpoint:
+            raise NamoIDError("The issuer does not advertise token revocation",
+                              code="revocation_unavailable")
+        self._send(_revoke_call(
+            endpoint=discovery.revocation_endpoint, token=token,
+            token_type_hint=token_type_hint, client_id=self._client_id,
+            client_secret=client_secret or self._client_secret,
+        ))
+
+    def logout_url(self, *, id_token_hint: str, post_logout_redirect_uri: str | None = None,
+                   state: str | None = None) -> str:
+        return build_logout_url(self.get_oidc_discovery(), id_token_hint=id_token_hint,
+                                post_logout_redirect_uri=post_logout_redirect_uri, state=state)
 
     def validate_access_token(
         self, token: str, *, client_secret: str | None = None
@@ -254,6 +356,7 @@ class NamoIDClient(_ClientBase):
                 self._url(call.path),
                 params=dict(call.params or {}) or None,
                 json=dict(call.json) if call.json is not None else None,
+                data=dict(call.data) if call.data is not None else None,
                 headers={"accept": "application/json", **(call.headers or {})},
             )
         except httpx.HTTPError as exc:
@@ -290,6 +393,23 @@ class AsyncNamoIDClient(_ClientBase):
             )
         return self._config
 
+    async def get_oidc_discovery(self, *, refresh: bool = False) -> OIDCDiscovery:
+        if self._discovery is None or refresh:
+            issuer = (await self.get_auth_config(refresh=refresh)).issuer.rstrip("/")
+            payload = await self._send(
+                _Call("GET", f"{issuer}/.well-known/openid-configuration",
+                      failure_code="oidc_discovery_failed", failure_label="OIDC discovery")
+            )
+            self._discovery = OIDCDiscovery.from_payload(payload, expected_issuer=issuer)
+        return self._discovery
+
+    async def authorization_url(self, transaction: OIDCTransaction, *,
+                                scopes: Sequence[str] = ("openid", "profile", "email"),
+                                extra_params: Mapping[str, str] | None = None) -> str:
+        return self._authorization_url(
+            await self.get_oidc_discovery(), transaction, scopes, extra_params
+        )
+
     async def hosted_auth_url(self, **kwargs: Any) -> str:
         return self._hosted_url(await self.get_auth_config(), kwargs)
 
@@ -297,25 +417,67 @@ class AsyncNamoIDClient(_ClientBase):
         self,
         *,
         code: str,
-        code_verifier: str | None = None,
+        code_verifier: str,
+        redirect_uri: str,
         client_secret: str | None = None,
-        device_id: str | None = None,
-        confidential: bool = True,
+        confidential: bool | None = None,
     ) -> TokenResponse:
-        secret = self._require_secret(client_secret) if confidential else None
+        secret = client_secret or self._client_secret
+        if confidential is True:
+            secret = self._require_secret(client_secret)
+        discovery = await self.get_oidc_discovery()
         payload = await self._send(
-            _exchange_call(
+            _token_call(
+                endpoint=discovery.token_endpoint,
                 code=code,
+                redirect_uri=redirect_uri,
                 code_verifier=code_verifier,
                 client_id=self._client_id,
                 client_secret=secret,
-                device_id=device_id,
             )
         )
         return TokenResponse.from_payload(payload)
 
-    async def refresh(self, refresh_token: str) -> TokenResponse:
-        return TokenResponse.from_payload(await self._send(_refresh_call(refresh_token)))
+    async def refresh(self, refresh_token: str, *, scopes: Sequence[str] | None = None,
+                      client_secret: str | None = None) -> TokenResponse:
+        discovery = await self.get_oidc_discovery()
+        return TokenResponse.from_payload(await self._send(_refresh_call(
+            endpoint=discovery.token_endpoint, refresh_token=refresh_token,
+            client_id=self._client_id, client_secret=client_secret or self._client_secret,
+            scopes=scopes,
+        )))
+
+    async def user_info(self, access_token: str) -> Mapping[str, Any]:
+        return await self._send(_userinfo_call(
+            endpoint=(await self.get_oidc_discovery()).userinfo_endpoint,
+            access_token=access_token,
+        ))
+
+    async def validate_id_token(self, id_token: str, *, nonce: str) -> Mapping[str, Any]:
+        discovery = await self.get_oidc_discovery()
+        jwks = await self._send(_Call("GET", discovery.jwks_uri,
+                                      failure_code="jwks_unavailable",
+                                      failure_label="OIDC signing keys"))
+        return validate_id_token(id_token, jwks=jwks, issuer=discovery.issuer,
+                                 client_id=self._client_id, nonce=nonce)
+
+    async def revoke_token(self, token: str, *, token_type_hint: str | None = None,
+                           client_secret: str | None = None) -> None:
+        discovery = await self.get_oidc_discovery()
+        if not discovery.revocation_endpoint:
+            raise NamoIDError("The issuer does not advertise token revocation",
+                              code="revocation_unavailable")
+        await self._send(_revoke_call(
+            endpoint=discovery.revocation_endpoint, token=token,
+            token_type_hint=token_type_hint, client_id=self._client_id,
+            client_secret=client_secret or self._client_secret,
+        ))
+
+    async def logout_url(self, *, id_token_hint: str,
+                         post_logout_redirect_uri: str | None = None,
+                         state: str | None = None) -> str:
+        return build_logout_url(await self.get_oidc_discovery(), id_token_hint=id_token_hint,
+                                post_logout_redirect_uri=post_logout_redirect_uri, state=state)
 
     async def validate_access_token(
         self, token: str, *, client_secret: str | None = None
@@ -341,6 +503,7 @@ class AsyncNamoIDClient(_ClientBase):
                 self._url(call.path),
                 params=dict(call.params or {}) or None,
                 json=dict(call.json) if call.json is not None else None,
+                data=dict(call.data) if call.data is not None else None,
                 headers={"accept": "application/json", **(call.headers or {})},
             )
         except httpx.HTTPError as exc:
