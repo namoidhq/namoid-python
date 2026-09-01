@@ -4,15 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "namoid"
-version = "0.0.2"
+version = "0.1.0"
 description = "Python SDK for NamoID, enterprise identity for India (OAuth 2.1 / OIDC)."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "PolyMindsLabs Pvt. Ltd.", email = "hello@namoid.in" }]
 keywords = [
   "namoid",
+  "mcp",
+  "model-context-protocol",
   "authentication",
   "oauth",
   "oauth2",
@@ -32,8 +34,29 @@ classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Security",
   "Topic :: Software Development :: Libraries",
+]
+
+dependencies = [
+  "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+# Protect an MCP server. Framework-agnostic core: discovery, audience-bound
+# token verification, and RFC 9728 metadata.
+mcp = [
+  "joserfc>=1.0",
+]
+# The same core wired into FastMCP. `fastmcp` itself requires a newer Python
+# than this package's floor, so pip enforces that when the extra is installed.
+fastmcp = [
+  "joserfc>=1.0",
+  "fastmcp>=3.4.5,<4",
 ]
 
 [project.urls]
@@ -44,3 +67,11 @@ Issues = "https://github.com/namoidhq/namoid-python/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/namoid"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

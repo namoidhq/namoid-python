@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the package declares, and the newest supported release.
+        python-version: ["3.11", "3.13"]
+        # 3.10 is the declared floor but fastmcp needs 3.11+, so the floor is
+        # verified by the core-extra-only job below.
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install with the fastmcp extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[fastmcp]" pytest pytest-asyncio
+
+      - name: Test
+        run: python -m pytest tests/ -q
+
+  core-extra-only:
+    # The framework-agnostic core must import and work with no MCP framework
+    # installed, so `namoid[mcp]` stays usable outside FastMCP. Also runs on the
+    # declared minimum Python, which fastmcp itself does not support.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install with the mcp extra only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[mcp]" pytest pytest-asyncio
+
+      - name: Core, Hosted Auth, and modularity tests
+        run: >-
+          python -m pytest tests/test_mcp_authorization.py tests/test_hosted_auth.py
+          tests/test_modularity.py -q
+
+      - name: Assert fastmcp is absent
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("fastmcp") is not None:
+              sys.exit("fastmcp must not be installed by the mcp extra")
+          import namoid.mcp
+          print("core imports without an MCP framework")
+          PY
