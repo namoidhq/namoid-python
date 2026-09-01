@@ -23,7 +23,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __homepage__ = "https://namoid.in"
 
 # Public name -> the module that defines it. Resolved on first attribute access
@@ -37,6 +37,12 @@ _LAZY_EXPORTS = {
     "HostedAuthTransaction": "namoid.hosted_auth",
     "TokenResponse": "namoid.hosted_auth",
     "TokenValidation": "namoid.hosted_auth",
+    "OIDCDiscovery": "namoid.oidc",
+    "OIDCTransaction": "namoid.oidc",
+    "build_authorization_url": "namoid.oidc",
+    "build_logout_url": "namoid.oidc",
+    "create_oidc_transaction": "namoid.oidc",
+    "validate_id_token": "namoid.oidc",
     "build_configured_hosted_auth_url": "namoid.hosted_auth",
     "build_hosted_auth_url": "namoid.hosted_auth",
     "create_hosted_auth_transaction": "namoid.hosted_auth",
@@ -48,12 +54,18 @@ __all__ = [
     "HostedAuthTransaction",
     "NamoIDClient",
     "NamoIDError",
+    "OIDCDiscovery",
+    "OIDCTransaction",
     "TokenResponse",
     "TokenValidation",
     "__homepage__",
     "__version__",
     "build_configured_hosted_auth_url",
     "build_hosted_auth_url",
+    "build_authorization_url",
+    "build_logout_url",
+    "create_oidc_transaction",
+    "validate_id_token",
     "create_hosted_auth_transaction",
 ]
 
@@ -84,6 +96,12 @@ if TYPE_CHECKING:
     from namoid.hosted_auth import (
         build_configured_hosted_auth_url as build_configured_hosted_auth_url,
     )
+    from namoid.oidc import OIDCDiscovery as OIDCDiscovery
+    from namoid.oidc import OIDCTransaction as OIDCTransaction
+    from namoid.oidc import build_authorization_url as build_authorization_url
+    from namoid.oidc import build_logout_url as build_logout_url
+    from namoid.oidc import create_oidc_transaction as create_oidc_transaction
+    from namoid.oidc import validate_id_token as validate_id_token
     from namoid.hosted_auth import build_hosted_auth_url as build_hosted_auth_url
     from namoid.hosted_auth import (
         create_hosted_auth_transaction as create_hosted_auth_transaction,

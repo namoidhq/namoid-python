@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "namoid"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python SDK for NamoID, enterprise identity for India (OAuth 2.1 / OIDC)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,18 +44,17 @@ classifiers = [
 
 dependencies = [
   "httpx>=0.28",
+  "joserfc>=1.0",
 ]
 
 [project.optional-dependencies]
 # Protect an MCP server. Framework-agnostic core: discovery, audience-bound
 # token verification, and RFC 9728 metadata.
 mcp = [
-  "joserfc>=1.0",
 ]
 # The same core wired into FastMCP. `fastmcp` itself requires a newer Python
 # than this package's floor, so pip enforces that when the extra is installed.
 fastmcp = [
-  "joserfc>=1.0",
   "fastmcp>=3.4.5,<4",
 ]
 

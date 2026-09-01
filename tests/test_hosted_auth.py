@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from joserfc import jwk, jwt
 
 from namoid import (
     AsyncNamoIDClient,
@@ -56,6 +58,28 @@ TOKEN_PAYLOAD = {
     "expires_in": 900,
     "user_id": "11111111-1111-1111-1111-111111111111",
 }
+
+DISCOVERY_PAYLOAD = {
+    "issuer": CONFIG_PAYLOAD["issuer"],
+    "authorization_endpoint": f'{CONFIG_PAYLOAD["issuer"]}/oauth/authorize',
+    "token_endpoint": f'{CONFIG_PAYLOAD["issuer"]}/v1/oauth/token',
+    "userinfo_endpoint": f'{CONFIG_PAYLOAD["issuer"]}/v1/oauth/userinfo',
+    "jwks_uri": f'{CONFIG_PAYLOAD["issuer"]}/v1/oauth/jwks.json',
+    "revocation_endpoint": f'{CONFIG_PAYLOAD["issuer"]}/v1/oauth/revoke',
+    "end_session_endpoint": f'{CONFIG_PAYLOAD["issuer"]}/oauth/logout',
+    "code_challenge_methods_supported": ["S256"],
+}
+
+
+def oidc_handler(final):
+    def handler(request):
+        if request.url.path == "/v1/auth/config":
+            return httpx.Response(200, json=CONFIG_PAYLOAD)
+        if request.url.path == "/.well-known/openid-configuration":
+            return httpx.Response(200, json=DISCOVERY_PAYLOAD)
+        return final(request)
+
+    return handler
 
 
 def recorder(handler):
@@ -251,39 +275,45 @@ def test_builds_the_hosted_url_from_the_fetched_config():
 
 
 def test_exchanges_a_code_with_a_client_secret():
-    import json
-
     seen, client = sync_client(
-        lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD), client_secret=CLIENT_SECRET
+        oidc_handler(lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD)),
+        client_secret=CLIENT_SECRET,
     )
 
-    tokens = client.exchange_code(code="c" * 40, code_verifier="v" * 50)
+    tokens = client.exchange_code(
+        code="c" * 40,
+        code_verifier="v" * 50,
+        redirect_uri="https://app.example/callback",
+    )
 
     assert tokens.access_token == "access-token-value"
     assert tokens.refresh_token == "refresh-token-value"
     assert tokens.expires_in == 900
     assert tokens.user_id == "11111111-1111-1111-1111-111111111111"
 
-    body = json.loads(seen[0].content)
-    assert seen[0].url.path == "/v1/auth/hosted/exchange"
-    assert body["client_secret"] == CLIENT_SECRET
-    assert body["code_verifier"] == "v" * 50
-    # Unset optional fields are omitted rather than sent as null.
-    assert "device_id" not in body
+    request = seen[-1]
+    body = parse_qs(request.content.decode())
+    assert request.url.path == "/v1/oauth/token"
+    assert request.headers["authorization"].startswith("Basic ")
+    assert body["grant_type"] == ["authorization_code"]
+    assert body["redirect_uri"] == ["https://app.example/callback"]
+    assert body["code_verifier"] == ["v" * 50]
 
 
 def test_public_exchange_sends_no_secret():
-    import json
-
-    seen, client = sync_client(lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD))
-    client.exchange_code(code="c" * 40, code_verifier="v" * 50, confidential=False)
-    assert "client_secret" not in json.loads(seen[0].content)
+    seen, client = sync_client(
+        oidc_handler(lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD))
+    )
+    client.exchange_code(code="c" * 40, code_verifier="v" * 50,
+                         redirect_uri="https://app.example/callback", confidential=False)
+    assert "authorization" not in seen[-1].headers
 
 
 def test_confidential_calls_refuse_to_run_without_a_secret():
     _seen, client = sync_client(lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD))
     with pytest.raises(NamoIDError, match="client_secret is required"):
-        client.exchange_code(code="c" * 40)
+        client.exchange_code(code="c" * 40, code_verifier="v" * 50,
+                             redirect_uri="https://app.example/callback", confidential=True)
     with pytest.raises(NamoIDError, match="client_secret is required"):
         client.validate_access_token("token")
 
@@ -313,10 +343,81 @@ def test_validates_an_access_token():
 
 
 def test_refreshes_a_session():
-    seen, client = sync_client(lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD))
+    seen, client = sync_client(
+        oidc_handler(lambda _r: httpx.Response(200, json=TOKEN_PAYLOAD))
+    )
     tokens = client.refresh("refresh-token-value")
     assert tokens.access_token == "access-token-value"
-    assert seen[0].url.path == "/v1/auth/refresh"
+    assert seen[-1].url.path == "/v1/oauth/token"
+    assert parse_qs(seen[-1].content.decode())["grant_type"] == ["refresh_token"]
+
+
+def test_builds_standard_authorization_url_with_nonce_and_pkce():
+    seen, client = sync_client(oidc_handler(lambda _r: httpx.Response(404)))
+    transaction = client.create_oidc_transaction("https://app.example/callback")
+    url = client.authorization_url(transaction)
+    query = parse_qs(urlsplit(url).query)
+
+    assert urlsplit(url).path == "/oauth/authorize"
+    assert query["client_id"] == [CLIENT_ID]
+    assert query["redirect_uri"] == [transaction.redirect_uri]
+    assert query["state"] == [transaction.state]
+    assert query["nonce"] == [transaction.nonce]
+    assert query["code_challenge_method"] == ["S256"]
+    assert transaction.code_verifier not in url
+    assert [request.url.path for request in seen] == [
+        "/v1/auth/config", "/.well-known/openid-configuration"
+    ]
+
+
+def test_userinfo_revocation_and_logout_use_discovered_endpoints():
+    def final(request):
+        if request.url.path == "/v1/oauth/userinfo":
+            return httpx.Response(200, json={"sub": "user-1", "email": "user@example.com"})
+        if request.url.path == "/v1/oauth/revoke":
+            return httpx.Response(200)
+        return httpx.Response(404)
+
+    seen, client = sync_client(oidc_handler(final), client_secret=CLIENT_SECRET)
+    assert client.user_info("access-token-value")["sub"] == "user-1"
+    client.revoke_token("refresh-token-value", token_type_hint="refresh_token")
+    logout = client.logout_url(
+        id_token_hint="id-token-value",
+        post_logout_redirect_uri="https://app.example/signed-out",
+        state="logout-state",
+    )
+
+    assert seen[-2].headers["authorization"] == "Bearer access-token-value"
+    revocation = seen[-1]
+    assert revocation.url.path == "/v1/oauth/revoke"
+    assert revocation.headers["authorization"].startswith("Basic ")
+    assert parse_qs(revocation.content.decode())["token_type_hint"] == ["refresh_token"]
+    logout_query = parse_qs(urlsplit(logout).query)
+    assert urlsplit(logout).path == "/oauth/logout"
+    assert logout_query["post_logout_redirect_uri"] == ["https://app.example/signed-out"]
+    assert logout_query["state"] == ["logout-state"]
+
+
+def test_validates_id_token_signature_claims_and_nonce():
+    key = jwk.RSAKey.generate_key(2048, parameters={"kid": "id-key", "alg": "RS256"})
+    now = int(time.time())
+    token = jwt.encode(
+        {"alg": "RS256", "kid": "id-key"},
+        {"iss": CONFIG_PAYLOAD["issuer"], "aud": CLIENT_ID, "sub": "user-1",
+         "iat": now, "exp": now + 300, "nonce": "expected-nonce"},
+        key,
+    )
+
+    def final(request):
+        if request.url.path == "/v1/oauth/jwks.json":
+            return httpx.Response(200, json={"keys": [key.as_dict(private=False)]})
+        return httpx.Response(404)
+
+    _seen, client = sync_client(oidc_handler(final))
+    assert client.validate_id_token(token, nonce="expected-nonce")["sub"] == "user-1"
+    with pytest.raises(NamoIDError) as excinfo:
+        client.validate_id_token(token, nonce="attacker-nonce")
+    assert excinfo.value.code == "invalid_id_token"
 
 
 def test_revokes_a_session_and_tolerates_an_empty_204():
@@ -329,14 +430,15 @@ def test_revokes_a_session_and_tolerates_an_empty_204():
 
 def test_surfaces_the_api_error_message_and_code():
     _seen, client = sync_client(
-        lambda _r: httpx.Response(
+        oidc_handler(lambda _r: httpx.Response(
             400, json={"error": "invalid_grant", "message": "authorization code expired"}
-        ),
+        )),
         client_secret=CLIENT_SECRET,
     )
 
     with pytest.raises(NamoIDError) as excinfo:
-        client.exchange_code(code="c" * 40)
+        client.exchange_code(code="c" * 40, code_verifier="v" * 50,
+                             redirect_uri="https://app.example/callback")
 
     error = excinfo.value
     assert "authorization code expired" in str(error)
@@ -346,7 +448,7 @@ def test_surfaces_the_api_error_message_and_code():
 
 
 def test_falls_back_to_a_generic_message_for_an_opaque_failure():
-    _seen, client = sync_client(lambda _r: httpx.Response(502, text="upstream boom"))
+    _seen, client = sync_client(oidc_handler(lambda _r: httpx.Response(502, text="upstream boom")))
     with pytest.raises(NamoIDError) as excinfo:
         client.refresh("refresh-token-value")
     assert excinfo.value.status == 502
@@ -365,7 +467,9 @@ def test_reports_a_transport_failure_without_a_status():
 
 
 def test_rejects_a_token_response_without_an_access_token():
-    _seen, client = sync_client(lambda _r: httpx.Response(200, json={"expires_in": 900}))
+    _seen, client = sync_client(
+        oidc_handler(lambda _r: httpx.Response(200, json={"expires_in": 900}))
+    )
     with pytest.raises(NamoIDError, match="did not include an access_token"):
         client.refresh("refresh-token-value")
 
@@ -383,7 +487,9 @@ async def test_async_client_mirrors_the_sync_one():
     def handler(request: httpx.Response) -> httpx.Response:
         if request.url.path == "/v1/auth/config":
             return httpx.Response(200, json=CONFIG_PAYLOAD)
-        if request.url.path == "/v1/auth/hosted/exchange":
+        if request.url.path == "/.well-known/openid-configuration":
+            return httpx.Response(200, json=DISCOVERY_PAYLOAD)
+        if request.url.path == "/v1/oauth/token":
             return httpx.Response(200, json=TOKEN_PAYLOAD)
         if request.url.path == "/v1/auth/logout":
             return httpx.Response(204)
@@ -401,14 +507,18 @@ async def test_async_client_mirrors_the_sync_one():
         )
         assert parse_qs(urlsplit(url).query)["client_id"] == [CLIENT_ID]
 
-        tokens = await client.exchange_code(code="c" * 40, code_verifier="v" * 50)
+        tokens = await client.exchange_code(
+            code="c" * 40, code_verifier="v" * 50,
+            redirect_uri="https://app.example/callback"
+        )
         assert tokens.access_token == "access-token-value"
 
         await client.revoke_session(access_token=tokens.access_token)
 
     assert [r.url.path for r in seen] == [
         "/v1/auth/config",
-        "/v1/auth/hosted/exchange",
+        "/.well-known/openid-configuration",
+        "/v1/oauth/token",
         "/v1/auth/logout",
     ]
 
